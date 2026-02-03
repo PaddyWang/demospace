@@ -1,8 +1,9 @@
-type Length<T extends []> = T['length']
+type Length<T extends readonly any[]> = T['length']
 
 
 /*
 function length (arr) {
+  if (!Array.isArray(arr)) return;
   return arr.length
 }
 */
