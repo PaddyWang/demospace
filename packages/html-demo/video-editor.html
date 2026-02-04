@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Video Timeline Demo</title>
+  <style>
+    body {
+      background: #0f172a;
+      color: #e5e7eb;
+      font-family: system-ui;
+      padding: 20px;
+    }
+
+    #container {
+      width: 100%;
+      overflow: hidden;
+      border: 1px solid #334155;
+      background: #020617;
+      user-select: none;
+    }
+
+    canvas {
+      display: block;
+    }
+
+    .tip {
+      margin-top: 10px;
+      color: #94a3b8;
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+
+<h2>🎞 视频时间轴 Demo</h2>
+
+<div id="container">
+  <canvas id="timeline" height="80"></canvas>
+</div>
+
+<div class="tip">
+  Ctrl + 滚轮：缩放时间轴 ｜ 鼠标拖拽：平移时间轴
+</div>
+
+<script type="module">
+/* ========================
+ * 基础状态
+ * ======================== */
+const state = {
+  duration: 0,
+  pxPerSecond: 100,
+  scrollLeft: 0,
+  viewportWidth: 0
+}
+
+/* ========================
+ * DOM
+ * ======================== */
+const container = document.getElementById('container')
+const canvas = document.getElementById('timeline')
+const ctx = canvas.getContext('2d')
+
+state.viewportWidth = container.clientWidth
+canvas.width = state.viewportWidth
+
+/* ========================
+ * 视频加载（fetch）
+ * ======================== */
+const videoUrl = ' http://127.0.0.1:8080/new.mp4' // 👈 换成你的视频
+const video = await createVideo(videoUrl)
+
+state.duration = video.duration
+
+/* ========================
+ * Offscreen
+ * ======================== */
+const frameHeight = canvas.height
+const offscreen = document.createElement('canvas')
+const offCtx = offscreen.getContext('2d')
+
+/* ========================
+ * 帧缓存
+ * ======================== */
+const frameCache = new Map()
+
+/* ========================
+ * 核心映射
+ * ======================== */
+const timeToX = t => t * state.pxPerSecond
+const xToTime = x => x / state.pxPerSecond
+
+/* ========================
+ * 缩放逻辑
+ * ======================== */
+container.addEventListener('wheel', e => {
+  if (!e.ctrlKey) return
+  e.preventDefault()
+
+  const factor = e.deltaY < 0 ? 1.1 : 0.9
+  zoom(factor, e.offsetX)
+}, { passive: false })
+
+function zoom(factor, centerX) {
+  const old = state.pxPerSecond
+  const next = clamp(old * factor, 30, 600)
+
+  const timeAtCursor = xToTime(centerX + state.scrollLeft)
+
+  state.pxPerSecond = next
+  state.scrollLeft = timeToX(timeAtCursor) - centerX
+
+  render()
+}
+
+/* ========================
+ * 拖拽平移
+ * ======================== */
+let dragging = false
+let lastX = 0
+
+container.addEventListener('mousedown', e => {
+  dragging = true
+  lastX = e.clientX
+})
+
+window.addEventListener('mousemove', e => {
+  if (!dragging) return
+  const dx = e.clientX - lastX
+  lastX = e.clientX
+
+  state.scrollLeft = clamp(
+    state.scrollLeft - dx,
+    0,
+    timeToX(state.duration) - state.viewportWidth
+  )
+
+  render()
+})
+
+window.addEventListener('mouseup', () => dragging = false)
+
+/* ========================
+ * 帧密度策略
+ * ======================== */
+function getFrameInterval() {
+  const px = state.pxPerSecond
+  if (px < 60) return 2
+  if (px < 120) return 1
+  if (px < 240) return 0.5
+  if (px < 400) return 0.25
+  return 1 / 30
+}
+
+/* ========================
+ * 获取帧（缓存）
+ * ======================== */
+async function getFrame(time) {
+  const key = time.toFixed(3)
+  if (frameCache.has(key)) return frameCache.get(key)
+
+  await seek(video, time)
+
+  const ratio = video.videoWidth / video.videoHeight
+  const w = frameHeight * ratio
+
+  offscreen.width = w
+  offscreen.height = frameHeight
+
+  offCtx.drawImage(video, 0, 0, w, frameHeight)
+  const bmp = await createImageBitmap(offscreen)
+
+  frameCache.set(key, bmp)
+  return bmp
+}
+
+/* ========================
+ * 渲染
+ * ======================== */
+async function render() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+  const startTime = xToTime(state.scrollLeft)
+  const endTime = xToTime(state.scrollLeft + state.viewportWidth)
+
+  const interval = getFrameInterval()
+  const start = Math.floor(startTime / interval) * interval
+
+  for (let t = start; t < endTime; t += interval) {
+    const x = timeToX(t) - state.scrollLeft
+    if (x < -100 || x > canvas.width + 100) continue
+
+    const frame = await getFrame(t)
+    ctx.drawImage(frame, x, 0)
+  }
+
+  drawPlayhead()
+}
+
+/* ========================
+ * 播放头
+ * ======================== */
+function drawPlayhead() {
+  const x = timeToX(video.currentTime) - state.scrollLeft
+
+  ctx.strokeStyle = '#ef4444'
+  ctx.beginPath()
+  ctx.moveTo(x, 0)
+  ctx.lineTo(x, canvas.height)
+  ctx.stroke()
+}
+
+/* ========================
+ * 工具函数
+ * ======================== */
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v))
+}
+
+function seek(video, time) {
+  return new Promise(r => {
+    video.currentTime = Math.min(time, video.duration)
+    video.onseeked = r
+  })
+}
+
+function once(el, ev) {
+  return new Promise(r => el.addEventListener(ev, r, { once: true }))
+}
+
+async function createVideo(url) {
+  const res = await fetch(url)
+  const blob = await res.blob()
+
+  const v = document.createElement('video')
+  v.src = URL.createObjectURL(blob)
+  v.muted = true
+  v.playsInline = true
+
+  await once(v, 'loadedmetadata')
+  return v
+}
+
+/* ========================
+ * 初始化
+ * ======================== */
+render()
+</script>
+
+</body>
+</html>
