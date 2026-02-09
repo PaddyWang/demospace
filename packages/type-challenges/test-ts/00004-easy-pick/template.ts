@@ -23,3 +23,9 @@ function myPick (todo, keys) {
 // 4. 看 key 在不在 todo 里面
 //   4.1. keyof  [Lookup Types](https://www.typescriptlang.org/docs/handbook/release-notes/typescript-2-1.html)
 //   4.2. extends 约束条件
+
+type O = {
+  x: string;
+  y: number;
+}
+type x = keyof O

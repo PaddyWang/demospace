@@ -15,3 +15,4 @@ function myParameters (...args: unknown[]) {
 // 知识点
 // 1. infer
 // 参考资料：
+// https://github.com/Microsoft/TypeScript/pull/24897
